@@ -198,6 +198,13 @@
   <div id="charTag" class="hud-panel">
     <img id="charPhoto" src="skayler.png" alt="SKAYLER" class="hud-photo">
     <div id="charName">SKAYLER</div>
+    <div id="companionHud" style="display:none;margin-top:10px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.15);">
+      <img id="companionPhoto" src="edu.png" alt="EDU" class="hud-photo" style="width:50px;height:50px;border-color:#0088ff;box-shadow:0 0 8px rgba(0,136,255,0.6);">
+      <div id="companionName" style="font-size:10px;font-weight:700;letter-spacing:1px;color:#66ccff;margin-bottom:4px;">EDU</div>
+      <div style="width:100%;height:8px;background:#222;border:1px solid #444;border-radius:2px;overflow:hidden;">
+        <div id="companionHealthFill" style="width:100%;height:100%;background:linear-gradient(90deg,#0088ff,#0066cc);transition:width 0.25s;"></div>
+      </div>
+    </div>
   </div>
 </div>
 <div id="mobileControls">
@@ -219,7 +226,7 @@ const LEVELS = [
   { num:1, title:{PT:'FASE 1: A ESTRADA DA MORTE', EN:'LEVEL 1: ROAD OF DEATH'}, desc:{PT:'Sobreviva à emboscada na estrada para Macomia.', EN:'Survive the ambush on the road to Macomia.'}, weapon:'pistol', quota:8, prisoners:0 },
   { num:2, title:{PT:'FASE 2: FUGA NA MATA', EN:'LEVEL 2: FLEEING THE BUSH'}, desc:{PT:'Elimine os terroristas e encontre uma rota segura.', EN:'Eliminate terrorists and find a safe route.'}, weapon:'pistol', quota:12, prisoners:0 },
   { num:3, title:{PT:'FASE 3: O RIO E A MATA', EN:'LEVEL 3: THE RIVER AND THE BUSH'}, desc:{PT:'Limpe a área do rio. Encontrou uma submetralhadora.', EN:'Clear the river area. Found an SMG.'}, weapon:'smg', quota:15, prisoners:0 },
-  { num:4, title:{PT:'FASE 4: RESGATE NA VILA DE QUISSANGA', EN:'LEVEL 4: RESCUE IN QUISSANGA VILLAGE'}, desc:{PT:'Vocês entram sozinhos. Eliminem os terroristas e resgatem os prisioneiros.', EN:'You go in alone. Eliminate terrorists and rescue prisoners.'}, weapon:'smg', quota:20, prisoners:3 },
+  { num:4, title:{PT:'FASE 4: RESGATE NA VILA DE QUISSANGA', EN:'LEVEL 4: RESCUE IN QUISSANGA VILLAGE'}, desc:{PT:'Vocês entram sozinhos. Eliminem os terroristas e resgatem os prisioneiros.', EN:'You go in alone. Eliminate terrorists and rescue prisoners.'}, weapon:'smg', quota:20, prisoners:3, companion:true },
   { num:5, title:{PT:'FASE 5: A TRAVESSIA', EN:'LEVEL 5: THE CROSSING'}, desc:{PT:'Avance pelas trilhas. Encontrou um fuzil de assalto.', EN:'Advance through trails. Found an assault rifle.'}, weapon:'rifle', quota:22, prisoners:0 },
   { num:6, title:{PT:'FASE 6: BASE TERRORISTA EM MACOMIA', EN:'LEVEL 6: TERRORIST BASE IN MACOMIA'}, desc:{PT:'Eliminem o líder e resgatem os soldados capturados.', EN:'Eliminate the leader and rescue captured soldiers.'}, weapon:'rifle', quota:30, prisoners:4, hasBoss:true },
   { num:7, title:{PT:'FASE 7: O RÁDIO MILITAR', EN:'LEVEL 7: THE MILITARY RADIO'}, desc:{PT:'Defendam o rádio até a mensagem ser enviada. Encontrou uma metralhadora.', EN:'Defend the radio until the message is sent. Found a machine gun.'}, weapon:'mg', quota:28, prisoners:0 },
@@ -330,6 +337,9 @@ const world = { w: 2800, h: 2200 };
 let camera = { x:0, y:0 };
 const player = { x:0, y:0, r:16, speed:3.4, hp:100, maxHp:100, weapon:null, mag:0, reserve:0, cd:0, facing:0, alive:true, invuln:0, color:'#ff3333' };
 let enemies = [], bullets = [], particles = [], prisoners = [], helicopter = null, bossRef = null;
+let pickups = [];
+let companion = null;
+let mozFlags = [];
 let enemyBullets = [], shells = [], bombs = [], explosions = [];
 let obstacles = [];
 let base = null;
@@ -343,8 +353,34 @@ function loadLevel(idx) {
   player.color = S.character === 'SKAYLER' ? '#ff3333' : '#0088ff';
   enemies = []; bullets = []; particles = []; prisoners = [];
   helicopter = null; bossRef = null;
+  companion = null;
+  if (L.companion) {
+    const otherChar = S.character === 'SKAYLER' ? 'EDU' : 'SKAYLER';
+    companion = {
+      x: player.x + 60,
+      y: player.y + 60,
+      r: 16,
+      speed: 3.2,
+      hp: 100,
+      maxHp: 100,
+      weapon: WEAPONS[L.weapon],
+      mag: WEAPONS[L.weapon].mag,
+      reserve: WEAPONS[L.weapon].reserve,
+      cd: 0,
+      facing: 0,
+      alive: true,
+      char: otherChar,
+      invuln: 0,
+      reviveProgress: 0
+    };
+  }
   enemyBullets = []; shells = []; bombs = []; explosions = [];
   generateObstacles();
+  generatePickups();
+  mozFlags = [
+    { x: world.w * 0.25, y: world.h * 0.3 },
+    { x: world.w * 0.75, y: world.h * 0.75 }
+  ];
   base = null;
   if (L.prisoners > 0) generateBase();
   for (let i = 0; i < Math.min(L.quota, 10); i++) spawnOneEnemy();
@@ -528,6 +564,24 @@ function update(dt) {
       checkLevelComplete();
     }
   }
+  // ==== PICKUPS ====
+  for (const pk of pickups) {
+    pk.pulse += dt * 4;
+    if (!pk.taken && Math.hypot(pk.x - player.x, pk.y - player.y) < 40) {
+      pk.taken = true;
+      if (pk.type === 'medkit') {
+        player.hp = Math.min(player.maxHp, player.hp + 40);
+        spawnParticles(pk.x, pk.y, '#00ff88', 25);
+      } else {
+        player.reserve += 30;
+        if (player.mag === 0) tryReload();
+        spawnParticles(pk.x, pk.y, '#ffcc00', 25);
+      }
+      playSound('rescue');
+    }
+  }
+  pickups = pickups.filter(pk => !pk.taken);
+
   for (let i = particles.length - 1; i >= 0; i--) {
     const p = particles[i];
     p.x += p.vx; p.y += p.vy;
@@ -599,6 +653,108 @@ function update(dt) {
         if (player.hp <= 0) { player.hp = 0; gameOver(); return; }
       }
       enemyBullets.splice(i, 1);
+    }
+  }
+
+  // ==== COMPANHEIRO IA ====
+  if (companion) {
+    if (companion.alive) {
+      const pdx = player.x - companion.x, pdy = player.y - companion.y;
+      const pd = Math.hypot(pdx, pdy) || 1;
+      if (pd > 80) {
+        companion.x += (pdx/pd) * companion.speed;
+        companion.y += (pdy/pd) * companion.speed;
+        companion.facing = Math.atan2(pdy, pdx);
+      } else if (pd < 50) {
+        companion.x -= (pdx/pd) * companion.speed * 0.5;
+        companion.y -= (pdy/pd) * companion.speed * 0.5;
+      }
+      for (const o of obstacles) {
+        const cdx = companion.x - o.x, cdy = companion.y - o.y;
+        const cd = Math.hypot(cdx, cdy) || 1;
+        const cmin = o.r + companion.r;
+        if (cd < cmin) {
+          companion.x = o.x + (cdx/cd) * cmin;
+          companion.y = o.y + (cdy/cd) * cmin;
+        }
+      }
+      companion.x = Math.max(companion.r, Math.min(world.w - companion.r, companion.x));
+      companion.y = Math.max(companion.r, Math.min(world.h - companion.r, companion.y));
+
+      let nearest = null, nd = 500;
+      for (const en of enemies) {
+        const d = Math.hypot(en.x - companion.x, en.y - companion.y);
+        if (d < nd) { nd = d; nearest = en; }
+      }
+      if (nearest) {
+        companion.facing = Math.atan2(nearest.y - companion.y, nearest.x - companion.x);
+        companion.cd -= dt * 1000;
+        if (companion.cd <= 0 && companion.mag > 0) {
+          const w = companion.weapon;
+          const spread = (Math.random() - 0.5) * w.spread;
+          const a = companion.facing + spread;
+          bullets.push({
+            x: companion.x + Math.cos(a) * 20,
+            y: companion.y + Math.sin(a) * 20,
+            vx: Math.cos(a) * w.speed,
+            vy: Math.sin(a) * w.speed,
+            dmg: w.dmg,
+            life: 1.6,
+            color: w.color,
+            fromCompanion: true
+          });
+          companion.mag--;
+          companion.cd = w.cd;
+          playSound('shot');
+        }
+        if (companion.mag === 0 && companion.reserve > 0) {
+          const need = companion.weapon.mag - companion.mag;
+          const take = Math.min(need, companion.reserve);
+          companion.mag += take;
+          companion.reserve -= take;
+        }
+      }
+      for (const pk of pickups) {
+        if (pk.taken) continue;
+        if (Math.hypot(pk.x - companion.x, pk.y - companion.y) < 40) {
+          if (pk.type === 'medkit' && companion.hp < companion.maxHp * 0.7) {
+            pk.taken = true;
+            companion.hp = Math.min(companion.maxHp, companion.hp + 40);
+            spawnParticles(pk.x, pk.y, '#00ff88', 25);
+          } else if (pk.type === 'ammo') {
+            pk.taken = true;
+            companion.reserve += 30;
+            spawnParticles(pk.x, pk.y, '#ffcc00', 25);
+          }
+        }
+      }
+      for (const en of enemies) {
+        const d = Math.hypot(en.x - companion.x, en.y - companion.y);
+        if (d < en.r + companion.r && en.cd <= 0 && companion.invuln <= 0) {
+          companion.hp -= en.dmg * 0.5;
+          companion.invuln = 0.8;
+          spawnParticles(companion.x, companion.y, '#ff3333', 6);
+          if (companion.hp <= 0) {
+            companion.alive = false;
+            companion.hp = 0;
+            spawnParticles(companion.x, companion.y, '#ff6600', 20);
+          }
+        }
+      }
+      if (companion.invuln > 0) companion.invuln -= dt;
+    } else {
+      if (Math.hypot(companion.x - player.x, companion.y - player.y) < 45) {
+        companion.reviveProgress += dt;
+        if (companion.reviveProgress >= 1.5) {
+          companion.alive = true;
+          companion.hp = companion.maxHp * 0.5;
+          companion.reviveProgress = 0;
+          playSound('rescue');
+          spawnParticles(companion.x, companion.y, '#00ff88', 30);
+        }
+      } else {
+        companion.reviveProgress = 0;
+      }
     }
   }
 
@@ -753,6 +909,26 @@ function drawSoldier(sx, sy, angle, char, scale) {
   ctx.restore();
 }
 
+function generatePickups() {
+  pickups = [];
+  const count = 6;
+  for (let i = 0; i < count; i++) {
+    let x, y, tries = 0;
+    do {
+      x = 200 + Math.random() * (world.w - 400);
+      y = 200 + Math.random() * (world.h - 400);
+      tries++;
+    } while (tries < 30 && Math.hypot(x - world.w/2, y - world.h/2) < 300);
+    const isMed = i % 2 === 0;
+    pickups.push({
+      x, y, r: 14,
+      type: isMed ? 'medkit' : 'ammo',
+      pulse: Math.random() * Math.PI * 2,
+      taken: false
+    });
+  }
+}
+
 function spawnParticles(x, y, color, count) {
   for (let i = 0; i < count; i++) {
     const a = Math.random() * Math.PI * 2;
@@ -816,6 +992,47 @@ function drawWorld() {
       ctx.strokeStyle = '#1a1a1a'; ctx.lineWidth = 2;
       ctx.beginPath(); ctx.arc(ox, oy, o.r, 0, Math.PI*2); ctx.stroke();
     }
+  }
+
+  // ==== BANDEIRAS DE MOÇAMBIQUE ====
+  for (const f of mozFlags) {
+    const fx = f.x + offX, fy = f.y + offY;
+    ctx.fillStyle = 'rgba(0,0,0,0.4)';
+    ctx.beginPath(); ctx.ellipse(fx + 4, fy + 55, 20, 6, 0, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#666';
+    ctx.fillRect(fx - 2, fy - 60, 4, 115);
+    ctx.strokeStyle = '#333'; ctx.lineWidth = 1;
+    ctx.strokeRect(fx - 2, fy - 60, 4, 115);
+    const fw = 55, fh = 36;
+    const bx = fx + 2, by = fy - 60;
+    ctx.fillStyle = '#007168';
+    ctx.fillRect(bx, by, fw, fh * 0.22);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(bx, by + fh * 0.22, fw, fh * 0.06);
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(bx, by + fh * 0.28, fw, fh * 0.22);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(bx, by + fh * 0.50, fw, fh * 0.06);
+    ctx.fillStyle = '#d21034';
+    ctx.fillRect(bx, by + fh * 0.56, fw, fh * 0.44);
+    ctx.fillStyle = '#fce100';
+    ctx.beginPath();
+    ctx.moveTo(bx, by);
+    ctx.lineTo(bx + fw * 0.35, by + fh * 0.5);
+    ctx.lineTo(bx, by + fh);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#d21034';
+    ctx.beginPath();
+    ctx.arc(bx + fw * 0.13, by + fh * 0.5, 4, 0, Math.PI*2);
+    ctx.fill();
+    ctx.strokeStyle = '#111'; ctx.lineWidth = 1.5;
+    ctx.strokeRect(bx, by, fw, fh);
+    ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(bx + 4, by + 8);
+    ctx.quadraticCurveTo(bx + fw * 0.5, by + 4, bx + fw - 4, by + 10);
+    ctx.stroke();
   }
 
   if (base) {
@@ -884,6 +1101,34 @@ function drawWorld() {
     ctx.closePath(); ctx.fill();
   }
 
+  // ==== PICKUPS ====
+  for (const pk of pickups) {
+    const px = pk.x + offX, py = pk.y + offY;
+    const pulse = 1 + Math.sin(pk.pulse) * 0.15;
+    if (pk.type === 'medkit') {
+      ctx.fillStyle = 'rgba(0,255,136,0.25)';
+      ctx.beginPath(); ctx.arc(px, py, 24 * pulse, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(px - 12, py - 10, 24, 20);
+      ctx.strokeStyle = '#008844'; ctx.lineWidth = 2;
+      ctx.strokeRect(px - 12, py - 10, 24, 20);
+      ctx.fillStyle = '#cc0000';
+      ctx.fillRect(px - 2, py - 7, 4, 14);
+      ctx.fillRect(px - 7, py - 2, 14, 4);
+    } else {
+      ctx.fillStyle = 'rgba(255,204,0,0.25)';
+      ctx.beginPath(); ctx.arc(px, py, 24 * pulse, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle = '#5a4a20';
+      ctx.fillRect(px - 12, py - 10, 24, 20);
+      ctx.strokeStyle = '#ffcc00'; ctx.lineWidth = 2;
+      ctx.strokeRect(px - 12, py - 10, 24, 20);
+      ctx.fillStyle = '#ffcc00';
+      ctx.fillRect(px - 6, py - 5, 3, 10);
+      ctx.fillRect(px - 1, py - 5, 3, 10);
+      ctx.fillRect(px + 4, py - 5, 3, 10);
+    }
+  }
+
   for (const p of prisoners) {
     if (p.rescued) continue;
     const pulse = 1 + Math.sin(p.pulse) * 0.15;
@@ -938,6 +1183,24 @@ function drawWorld() {
       const ta = Math.atan2(player.y - en.y, player.x - en.x) - en.angle;
       ctx.rotate(ta);
       ctx.fillStyle = '#2a1a0a'; ctx.fillRect(10, -3, 35, 6);
+      // ==== BANDEIRA TERRORISTA NO TANQUE ====
+      ctx.fillStyle = '#444';
+      ctx.fillRect(8, -50, 2, 22);
+      ctx.fillStyle = '#0a0a0a';
+      ctx.fillRect(10, -50, 22, 16);
+      ctx.strokeStyle = '#333'; ctx.lineWidth = 1;
+      ctx.strokeRect(10, -50, 22, 16);
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(17, -42, 4, Math.PI * 0.5, Math.PI * 1.5);
+      ctx.lineTo(17, -46);
+      ctx.arc(17, -42, 4, Math.PI * 1.5, Math.PI * 0.5, true);
+      ctx.closePath(); ctx.fill();
+      ctx.beginPath();
+      ctx.arc(24, -42, 1.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillRect(10, -37, 22, 1.5);
+
       ctx.restore();
     } else if (en.type === 'helicopter') {
       ctx.fillStyle = 'rgba(0,0,0,0.4)';
@@ -1004,6 +1267,34 @@ function drawWorld() {
     }
   }
 
+  if (companion) {
+    if (companion.alive) {
+      drawSoldier(companion.x + offX, companion.y + offY, companion.facing, companion.char, 1);
+    } else {
+      const cx = companion.x + offX, cy = companion.y + offY;
+      ctx.fillStyle = 'rgba(0,0,0,0.5)';
+      ctx.beginPath(); ctx.ellipse(cx, cy + 5, 22, 10, 0, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle = '#4a0a0a';
+      ctx.beginPath(); ctx.ellipse(cx, cy, 20, 10, 0.5, 0, Math.PI*2); ctx.fill();
+      ctx.strokeStyle = '#ff3333'; ctx.lineWidth = 2; ctx.stroke();
+      if (Math.hypot(companion.x - player.x, companion.y - player.y) < 45) {
+        const prog = (companion.reviveProgress || 0) / 1.5;
+        ctx.fillStyle = 'rgba(0,0,0,0.7)';
+        ctx.fillRect(cx - 30, cy - 30, 60, 8);
+        ctx.fillStyle = '#00ff88';
+        ctx.fillRect(cx - 30, cy - 30, 60 * prog, 8);
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 10px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('A REANIMAR...', cx, cy - 35);
+      } else {
+        ctx.fillStyle = '#ff3333';
+        ctx.font = 'bold 12px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('CAIDO', cx, cy - 25);
+      }
+    }
+  }
   if (helicopter) {
     const hx = helicopter.x + offX, hy = helicopter.y + offY;
     ctx.fillStyle = '#2a3a2a';
@@ -1074,6 +1365,24 @@ function updateHUD() {
     player.hp > 25 ? 'linear-gradient(90deg,#ffcc00,#ff9900)' :
                      'linear-gradient(90deg,#ff3333,#cc0000)';
   document.getElementById('ammoText').textContent = player.mag + ' / ' + player.reserve;
+
+  const compHud = document.getElementById('companionHud');
+  if (companion) {
+    compHud.style.display = 'block';
+    const otherChar = S.character === 'SKAYLER' ? 'EDU' : 'SKAYLER';
+    const photo = document.getElementById('companionPhoto');
+    photo.src = otherChar === 'SKAYLER' ? 'skayler.png' : 'edu.png';
+    document.getElementById('companionName').textContent = otherChar;
+    const fill = document.getElementById('companionHealthFill');
+    fill.style.width = Math.max(0, (companion.hp / companion.maxHp * 100)) + '%';
+    fill.style.background = companion.hp > 50
+      ? 'linear-gradient(90deg,#0088ff,#0066cc)'
+      : companion.hp > 25
+        ? 'linear-gradient(90deg,#ffcc00,#ff9900)'
+        : 'linear-gradient(90deg,#ff3333,#cc0000)';
+  } else {
+    compHud.style.display = 'none';
+  }
   const nome = S.character || '';
   document.getElementById('charName').textContent = nome;
   const foto = document.getElementById('charPhoto');

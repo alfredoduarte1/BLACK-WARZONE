@@ -1,4 +1,4 @@
-const CACHE = 'bwz-v3';
+const CACHE = 'bwz-v4';
 const FILES = ['./', 'index.html', 'manifest.json', 'capa.jpg', 'skayler.png', 'edu.png', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', e => {
